@@ -49,10 +49,16 @@ Changelog = "https://github.com/pydantic/pydantic-ai/releases"
 examples = ["pydantic-ai-examples==0.0.19"]
 logfire = ["logfire>=2.3"]
 
+[tool.uv]
+dev-dependencies = [
+    "pydantic-ai[logfire]",
+]
+
 [tool.uv.sources]
 pydantic-ai-slim = { workspace = true }
 pydantic-graph = { workspace = true }
 pydantic-ai-examples = { workspace = true }
+pydantic-ai = { workspace = true }
 
 [tool.uv.workspace]
 members = ["pydantic_ai_slim", "pydantic_graph", "examples"]
