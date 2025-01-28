@@ -42,7 +42,7 @@ dependencies = [
     "rich>=13.9.2",
     "uvicorn>=0.32.0",
     "devtools>=0.12.2",
-    "gradio>=5.9.0; python_version>'3.9'",
+    "gradio>=4.19.0,<5.9.0",
 ]
 
 [tool.hatch.build.targets.wheel]

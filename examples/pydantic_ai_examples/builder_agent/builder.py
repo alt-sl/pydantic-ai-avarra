@@ -1,15 +1,5 @@
-"""Builder Agent Implementation
-
-This module implements a Builder Agent that can design and configure other agents based on
-natural language descriptions. The Builder Agent can:
-1. Understand requirements for a new agent
-2. Design appropriate system prompts
-3. Configure the agent with appropriate settings
-4. Hand off conversation to the created agent
-"""
-
 from dataclasses import dataclass
-from typing import Optional, Literal, Union, List
+from typing import Optional, Literal, Union
 
 import logfire
 from pydantic import BaseModel, Field
@@ -42,6 +32,9 @@ class AgentConfig(BaseModel):
     description: str = Field(
         description="A brief description of what this agent does"
     )
+    avatar: str = Field(
+        description="An avatar for the agent"
+    )
 
 class AgentResponse(BaseModel):
     """Response from the created agent."""
@@ -53,12 +46,8 @@ class BuilderDeps:
     
     This maintains state about the currently created agent and its configuration.
     """
-    message_history: List[ModelMessage]
     current_config: Optional[AgentConfig] = None
     created_agent: Optional[Agent[None, str]] = None
-
-    def __init__(self):
-        self.message_history = []
 
 # The Builder Agent itself
 builder_agent = Agent[BuilderDeps, Union[AgentConfig, AgentResponse]](
@@ -71,6 +60,7 @@ builder_agent = Agent[BuilderDeps, Union[AgentConfig, AgentResponse]](
 2. Design an appropriate system prompt that will make the agent behave as desired
 3. Choose an appropriate model for the agent's needs
 4. Create a clear name and description for the agent
+5. Once the agent is created, hand off the conversation completely to the new agent
 
 When designing system prompts:
 - Make them clear and specific
@@ -84,7 +74,8 @@ We will use claude-3-5-sonnet-latest for all agents as it provides excellent cap
 - Technical understanding
 - Consistent and high-quality outputs
 
-Always validate that your configurations make sense for the user's needs."""
+Always validate that your configurations make sense for the user's needs.
+After creating the agent, you will hand off the conversation completely to it."""
 )
 
 @builder_agent.tool
@@ -117,13 +108,25 @@ async def handoff_to_agent(ctx: RunContext[BuilderDeps], query: str) -> AgentRes
     if not ctx.deps.created_agent:
         raise ModelRetry("No agent has been created yet. Please create an agent first.")
     
-    # Use non-streaming response since Anthropic doesn't support streaming yet
-    result = await ctx.deps.created_agent.run(query, message_history=ctx.deps.message_history)
+    # Use streaming for the created agent's response
+    response_text = ""
+    async with ctx.deps.created_agent.run_stream(query) as result:
+        async for chunk in result.stream_text(delta=True):
+            response_text += chunk
+            print(chunk, end="", flush=True)  # Stream output directly
     
-    # Store the messages for context continuity
-    ctx.deps.message_history.extend(result.all_messages())
-    
-    return AgentResponse(response=result.data)
+    return AgentResponse(response=response_text)
+
+async def chat_with_agent(agent: Agent, user_message: str, message_history: Optional[list[ModelMessage]] = None) -> str:
+    """Chat directly with an agent, bypassing the terminal interface."""
+    async with agent.run_stream(
+        user_message,
+        message_history=message_history
+    ) as result:
+        response_text = ""
+        async for chunk in result.stream_text(delta=True):
+            response_text += chunk
+        return response_text, result.new_messages()
 
 async def main():
     """Example usage of the Builder Agent."""
@@ -141,17 +144,23 @@ async def main():
             break
 
         # Create the agent based on the description
-        result = await builder_agent.run(request, deps=deps)
-        
-        if isinstance(result.data, AgentConfig):
-            print(f"\nCreated agent configuration:")
-            print(f"Name: {result.data.name}")
-            print(f"Description: {result.data.description}")
-            print(f"Model: {result.data.model_name}")
-            print(f"System Prompt: {result.data.system_prompt}")
-            print("\nConfiguration complete!")
-        
-            # Now we can interact with the created agent
+        async with builder_agent.run_stream(request, deps=deps) as result:
+            print("\nCreating agent configuration...")
+            config = await result.get_data()
+            if isinstance(config, AgentConfig):
+                print(f"\nName: {config.name}")
+                print(f"Description: {config.description}")
+                print(f"Model: {config.model_name}")
+                print(f"System Prompt: {config.system_prompt}")
+                print("\nConfiguration complete! Now handing off to the created agent...")
+            
+            # Now we can interact directly with the created agent
+            created_agent = deps.created_agent
+            if not created_agent:
+                print("Error: No agent was created")
+                continue
+
+            # Direct conversation loop with the created agent
             while True:
                 query = Prompt.ask(
                     '\nWhat would you like to ask the agent? (or "back" to create a new agent)',
@@ -161,11 +170,41 @@ async def main():
                 if query.lower() == "back":
                     break
                     
-                # Get the agent's response
-                result = await builder_agent.run(query, deps=deps)
-                if isinstance(result.data, AgentResponse):
-                    print(f"\nAgent response:\n{result.data.response}")
+                # Stream the created agent's response directly
+                print("\nAgent response:")
+                async with created_agent.run_stream(query) as result:
+                    async for chunk in result.stream_text(delta=True):
+                        print(chunk, end="", flush=True)  # Stream output directly
+                print()  # Add newline after response
+
+# Example usage:
+async def direct_chat():
+    # First create the agent using builder_agent
+    deps = BuilderDeps()
+    async with builder_agent.run_stream("Create a friendly chat assistant", deps=deps) as result:
+        config = await result.get_data()
+        
+    created_agent = deps.created_agent
+    if not created_agent:
+        raise Exception("No agent was created")
+    
+    # Now we can chat directly with the created agent
+    message_history = None
+    
+    # Example of direct chat interaction
+    response, message_history = await chat_with_agent(
+        created_agent, 
+        "Hello! How are you?",
+        message_history
+    )
+    
+    # Continue conversation with history
+    next_response, message_history = await chat_with_agent(
+        created_agent,
+        "Tell me more about yourself",
+        message_history
+    )
 
 if __name__ == '__main__':
     import asyncio
-    asyncio.run(main()) 
+    asyncio.run(main())
