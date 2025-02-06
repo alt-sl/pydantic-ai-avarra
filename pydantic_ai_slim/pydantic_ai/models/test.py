@@ -12,7 +12,6 @@ import pydantic_core
 
 from .. import _utils
 from ..messages import (
-    ArgsJson,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -27,11 +26,25 @@ from ..result import Usage
 from ..settings import ModelSettings
 from ..tools import ToolDefinition
 from . import (
-    AgentModel,
     Model,
+    ModelRequestParameters,
     StreamedResponse,
 )
 from .function import _estimate_string_tokens, _estimate_usage  # pyright: ignore[reportPrivateUsage]
+
+
+@dataclass
+class _TextResult:
+    """A private wrapper class to tag a result that came from the custom_result_text field."""
+
+    value: str | None
+
+
+@dataclass
+class _FunctionToolResult:
+    """A wrapper class to tag a result that came from the custom_result_args field."""
+
+    value: Any | None
 
 
 @dataclass
@@ -53,107 +66,96 @@ class TestModel(Model):
     call_tools: list[str] | Literal['all'] = 'all'
     """List of tools to call. If `'all'`, all tools will be called."""
     custom_result_text: str | None = None
-    """If set, this text is return as the final result."""
+    """If set, this text is returned as the final result."""
     custom_result_args: Any | None = None
     """If set, these args will be passed to the result tool."""
     seed: int = 0
     """Seed for generating random data."""
-    agent_model_function_tools: list[ToolDefinition] | None = field(default=None, init=False)
-    """Definition of function tools passed to the model.
+    last_model_request_parameters: ModelRequestParameters | None = field(default=None, init=False)
+    """The last ModelRequestParameters passed to the model in a request.
 
-    This is set when the model is called, so will reflect the function tools from the last step of the last run.
+    The ModelRequestParameters contains information about the function and result tools available during request handling.
+
+    This is set when a request is made, so will reflect the function tools from the last step of the last run.
     """
-    agent_model_allow_text_result: bool | None = field(default=None, init=False)
-    """Whether plain text responses from the model are allowed.
-
-    This is set when the model is called, so will reflect the value from the last step of the last run.
-    """
-    agent_model_result_tools: list[ToolDefinition] | None = field(default=None, init=False)
-    """Definition of result tools passed to the model.
-
-    This is set when the model is called, so will reflect the result tools from the last step of the last run.
-    """
-
-    async def agent_model(
-        self,
-        *,
-        function_tools: list[ToolDefinition],
-        allow_text_result: bool,
-        result_tools: list[ToolDefinition],
-    ) -> AgentModel:
-        self.agent_model_function_tools = function_tools
-        self.agent_model_allow_text_result = allow_text_result
-        self.agent_model_result_tools = result_tools
-
-        if self.call_tools == 'all':
-            tool_calls = [(r.name, r) for r in function_tools]
-        else:
-            function_tools_lookup = {t.name: t for t in function_tools}
-            tools_to_call = (function_tools_lookup[name] for name in self.call_tools)
-            tool_calls = [(r.name, r) for r in tools_to_call]
-
-        if self.custom_result_text is not None:
-            assert allow_text_result, 'Plain response not allowed, but `custom_result_text` is set.'
-            assert self.custom_result_args is None, 'Cannot set both `custom_result_text` and `custom_result_args`.'
-            result: _utils.Either[str | None, Any | None] = _utils.Either(left=self.custom_result_text)
-        elif self.custom_result_args is not None:
-            assert result_tools is not None, 'No result tools provided, but `custom_result_args` is set.'
-            result_tool = result_tools[0]
-
-            if k := result_tool.outer_typed_dict_key:
-                result = _utils.Either(right={k: self.custom_result_args})
-            else:
-                result = _utils.Either(right=self.custom_result_args)
-        elif allow_text_result:
-            result = _utils.Either(left=None)
-        elif result_tools:
-            result = _utils.Either(right=None)
-        else:
-            result = _utils.Either(left=None)
-
-        return TestAgentModel(tool_calls, result, result_tools, self.seed)
 
     def name(self) -> str:
-        return 'test-model'
-
-
-@dataclass
-class TestAgentModel(AgentModel):
-    """Implementation of `AgentModel` for testing purposes."""
-
-    # NOTE: Avoid test discovery by pytest.
-    __test__ = False
-
-    tool_calls: list[tuple[str, ToolDefinition]]
-    # left means the text is plain text; right means it's a function call
-    result: _utils.Either[str | None, Any | None]
-    result_tools: list[ToolDefinition]
-    seed: int
-    model_name: str = 'test'
+        return 'test'
 
     async def request(
-        self, messages: list[ModelMessage], model_settings: ModelSettings | None
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
     ) -> tuple[ModelResponse, Usage]:
-        model_response = self._request(messages, model_settings)
+        self.last_model_request_parameters = model_request_parameters
+
+        model_response = self._request(messages, model_settings, model_request_parameters)
         usage = _estimate_usage([*messages, model_response])
         return model_response, usage
 
     @asynccontextmanager
     async def request_stream(
-        self, messages: list[ModelMessage], model_settings: ModelSettings | None
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
     ) -> AsyncIterator[StreamedResponse]:
-        model_response = self._request(messages, model_settings)
-        yield TestStreamedResponse(_model_name=self.model_name, _structured_response=model_response, _messages=messages)
+        self.last_model_request_parameters = model_request_parameters
+
+        model_response = self._request(messages, model_settings, model_request_parameters)
+        yield TestStreamedResponse(_model_name=self.name(), _structured_response=model_response, _messages=messages)
 
     def gen_tool_args(self, tool_def: ToolDefinition) -> Any:
         return _JsonSchemaTestData(tool_def.parameters_json_schema, self.seed).generate()
 
-    def _request(self, messages: list[ModelMessage], model_settings: ModelSettings | None) -> ModelResponse:
+    def _get_tool_calls(self, model_request_parameters: ModelRequestParameters) -> list[tuple[str, ToolDefinition]]:
+        if self.call_tools == 'all':
+            return [(r.name, r) for r in model_request_parameters.function_tools]
+        else:
+            function_tools_lookup = {t.name: t for t in model_request_parameters.function_tools}
+            tools_to_call = (function_tools_lookup[name] for name in self.call_tools)
+            return [(r.name, r) for r in tools_to_call]
+
+    def _get_result(self, model_request_parameters: ModelRequestParameters) -> _TextResult | _FunctionToolResult:
+        if self.custom_result_text is not None:
+            assert (
+                model_request_parameters.allow_text_result
+            ), 'Plain response not allowed, but `custom_result_text` is set.'
+            assert self.custom_result_args is None, 'Cannot set both `custom_result_text` and `custom_result_args`.'
+            return _TextResult(self.custom_result_text)
+        elif self.custom_result_args is not None:
+            assert (
+                model_request_parameters.result_tools is not None
+            ), 'No result tools provided, but `custom_result_args` is set.'
+            result_tool = model_request_parameters.result_tools[0]
+
+            if k := result_tool.outer_typed_dict_key:
+                return _FunctionToolResult({k: self.custom_result_args})
+            else:
+                return _FunctionToolResult(self.custom_result_args)
+        elif model_request_parameters.allow_text_result:
+            return _TextResult(None)
+        elif model_request_parameters.result_tools:
+            return _FunctionToolResult(None)
+        else:
+            return _TextResult(None)
+
+    def _request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        tool_calls = self._get_tool_calls(model_request_parameters)
+        result = self._get_result(model_request_parameters)
+        result_tools = model_request_parameters.result_tools
+
         # if there are tools, the first thing we want to do is call all of them
-        if self.tool_calls and not any(isinstance(m, ModelResponse) for m in messages):
+        if tool_calls and not any(isinstance(m, ModelResponse) for m in messages):
             return ModelResponse(
-                parts=[ToolCallPart.from_raw_args(name, self.gen_tool_args(args)) for name, args in self.tool_calls],
-                model_name=self.model_name,
+                parts=[ToolCallPart(name, self.gen_tool_args(args)) for name, args in tool_calls],
+                model_name=self.name(),
             )
 
         if messages:
@@ -166,23 +168,26 @@ class TestAgentModel(AgentModel):
                 # Handle retries for both function tools and result tools
                 # Check function tools first
                 retry_parts: list[ModelResponsePart] = [
-                    ToolCallPart.from_raw_args(name, self.gen_tool_args(args))
-                    for name, args in self.tool_calls
-                    if name in new_retry_names
+                    ToolCallPart(name, self.gen_tool_args(args)) for name, args in tool_calls if name in new_retry_names
                 ]
                 # Check result tools
-                if self.result_tools:
+                if result_tools:
                     retry_parts.extend(
                         [
-                            ToolCallPart.from_raw_args(tool.name, self.gen_tool_args(tool))
-                            for tool in self.result_tools
+                            ToolCallPart(
+                                tool.name,
+                                result.value
+                                if isinstance(result, _FunctionToolResult) and result.value is not None
+                                else self.gen_tool_args(tool),
+                            )
+                            for tool in result_tools
                             if tool.name in new_retry_names
                         ]
                     )
-                return ModelResponse(parts=retry_parts, model_name=self.model_name)
+                return ModelResponse(parts=retry_parts, model_name=self.name())
 
-        if response_text := self.result.left:
-            if response_text.value is None:
+        if isinstance(result, _TextResult):
+            if (response_text := result.value) is None:
                 # build up details of tool responses
                 output: dict[str, Any] = {}
                 for message in messages:
@@ -192,25 +197,21 @@ class TestAgentModel(AgentModel):
                                 output[part.tool_name] = part.content
                 if output:
                     return ModelResponse(
-                        parts=[TextPart(pydantic_core.to_json(output).decode())], model_name=self.model_name
+                        parts=[TextPart(pydantic_core.to_json(output).decode())], model_name=self.name()
                     )
                 else:
-                    return ModelResponse(parts=[TextPart('success (no tool calls)')], model_name=self.model_name)
+                    return ModelResponse(parts=[TextPart('success (no tool calls)')], model_name=self.name())
             else:
-                return ModelResponse(parts=[TextPart(response_text.value)], model_name=self.model_name)
+                return ModelResponse(parts=[TextPart(response_text)], model_name=self.name())
         else:
-            assert self.result_tools, 'No result tools provided'
-            custom_result_args = self.result.right
-            result_tool = self.result_tools[self.seed % len(self.result_tools)]
+            assert result_tools, 'No result tools provided'
+            custom_result_args = result.value
+            result_tool = result_tools[self.seed % len(result_tools)]
             if custom_result_args is not None:
-                return ModelResponse(
-                    parts=[ToolCallPart.from_raw_args(result_tool.name, custom_result_args)], model_name=self.model_name
-                )
+                return ModelResponse(parts=[ToolCallPart(result_tool.name, custom_result_args)], model_name=self.name())
             else:
                 response_args = self.gen_tool_args(result_tool)
-                return ModelResponse(
-                    parts=[ToolCallPart.from_raw_args(result_tool.name, response_args)], model_name=self.model_name
-                )
+                return ModelResponse(parts=[ToolCallPart(result_tool.name, response_args)], model_name=self.name())
 
 
 @dataclass
@@ -241,9 +242,8 @@ class TestStreamedResponse(StreamedResponse):
                     self._usage += _get_string_usage(word)
                     yield self._parts_manager.handle_text_delta(vendor_part_id=i, content=word)
             else:
-                args = part.args.args_json if isinstance(part.args, ArgsJson) else part.args.args_dict
                 yield self._parts_manager.handle_tool_call_part(
-                    vendor_part_id=i, tool_name=part.tool_name, args=args, tool_call_id=part.tool_call_id
+                    vendor_part_id=i, tool_name=part.tool_name, args=part.args, tool_call_id=part.tool_call_id
                 )
 
     def timestamp(self) -> datetime:

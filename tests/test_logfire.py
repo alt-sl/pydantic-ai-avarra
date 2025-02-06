@@ -75,14 +75,14 @@ def test_logfire(get_logfire_summary: Callable[[], LogfireSummary]) -> None:
                 'id': 0,
                 'message': 'my_agent run prompt=Hello',
                 'children': [
-                    {'id': 1, 'message': 'preparing model and tools run_step=1'},
+                    {'id': 1, 'message': 'preparing model request params run_step=1'},
                     {'id': 2, 'message': 'model request'},
                     {
                         'id': 3,
                         'message': 'handle model response -> tool-return',
                         'children': [{'id': 4, 'message': "running tools=['my_ret']"}],
                     },
-                    {'id': 5, 'message': 'preparing model and tools run_step=2'},
+                    {'id': 5, 'message': 'preparing model request params run_step=2'},
                     {'id': 6, 'message': 'model request'},
                     {'id': 7, 'message': 'handle model response -> final result'},
                 ],
@@ -102,16 +102,14 @@ def test_logfire(get_logfire_summary: Callable[[], LogfireSummary]) -> None:
                         'custom_result_text': None,
                         'custom_result_args': None,
                         'seed': 0,
-                        'agent_model_function_tools': None,
-                        'agent_model_allow_text_result': None,
-                        'agent_model_result_tools': None,
+                        'last_model_request_parameters': None,
                     },
                     'name': 'my_agent',
                     'end_strategy': 'early',
                     'model_settings': None,
                 }
             ),
-            'model_name': 'test-model',
+            'model_name': 'test',
             'agent_name': 'my_agent',
             'logfire.msg_template': '{agent_name} run {prompt=}',
             'logfire.msg': 'my_agent run prompt=Hello',
@@ -130,12 +128,7 @@ def test_logfire(get_logfire_summary: Callable[[], LogfireSummary]) -> None:
                     },
                     {
                         'parts': [
-                            {
-                                'tool_name': 'my_ret',
-                                'args': {'args_dict': {'x': 0}},
-                                'tool_call_id': None,
-                                'part_kind': 'tool-call',
-                            }
+                            {'tool_name': 'my_ret', 'args': {'x': 0}, 'tool_call_id': None, 'part_kind': 'tool-call'}
                         ],
                         'model_name': 'test',
                         'timestamp': IsStr(regex=r'\d{4}-\d{2}-.+'),
@@ -209,13 +202,6 @@ def test_logfire(get_logfire_summary: Callable[[], LogfireSummary]) -> None:
                                                 'type': 'object',
                                                 'title': 'ToolCallPart',
                                                 'x-python-datatype': 'dataclass',
-                                                'properties': {
-                                                    'args': {
-                                                        'type': 'object',
-                                                        'title': 'ArgsDict',
-                                                        'x-python-datatype': 'dataclass',
-                                                    }
-                                                },
                                             },
                                         },
                                         'timestamp': {'type': 'string', 'format': 'date-time'},
@@ -267,9 +253,9 @@ def test_logfire(get_logfire_summary: Callable[[], LogfireSummary]) -> None:
             'code.function': 'test_logfire',
             'code.lineno': IsInt(),
             'run_step': 1,
-            'logfire.msg_template': 'preparing model and tools {run_step=}',
+            'logfire.msg_template': 'preparing model request params {run_step=}',
             'logfire.span_type': 'span',
-            'logfire.msg': 'preparing model and tools run_step=1',
+            'logfire.msg': 'preparing model request params run_step=1',
             'logfire.json_schema': '{"type":"object","properties":{"run_step":{}}}',
         }
     )

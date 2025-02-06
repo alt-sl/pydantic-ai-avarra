@@ -14,7 +14,7 @@ class CityLocation(BaseModel):
     country: str
 
 
-agent = Agent('gemini-1.5-flash', result_type=CityLocation)
+agent = Agent('google-gla:gemini-1.5-flash', result_type=CityLocation)
 result = agent.run_sync('Where were the olympics held in 2012?')
 print(result.data)
 #> city='London' country='United Kingdom'
@@ -129,7 +129,7 @@ class InvalidRequest(BaseModel):
 
 Response = Union[Success, InvalidRequest]
 agent: Agent[DatabaseConn, Response] = Agent(
-    'gemini-1.5-flash',
+    'google-gla:gemini-1.5-flash',
     result_type=Response,  # type: ignore
     deps_type=DatabaseConn,
     system_prompt='Generate PostgreSQL flavored SQL queries based on user input.',
@@ -149,7 +149,7 @@ async def validate_result(ctx: RunContext[DatabaseConn], result: Response) -> Re
 
 
 result = agent.run_sync(
-    'get me uses who were last active yesterday.', deps=DatabaseConn()
+    'get me users who were last active yesterday.', deps=DatabaseConn()
 )
 print(result.data)
 #> sql_query='SELECT * FROM users WHERE last_active::date = today() - interval 1 day'
@@ -171,7 +171,7 @@ Example of streamed text result:
 ```python {title="streamed_hello_world.py" line_length="120"}
 from pydantic_ai import Agent
 
-agent = Agent('gemini-1.5-flash')  # (1)!
+agent = Agent('google-gla:gemini-1.5-flash')  # (1)!
 
 
 async def main():
@@ -197,7 +197,7 @@ We can also stream text as deltas rather than the entire text in each item:
 ```python {title="streamed_delta_hello_world.py"}
 from pydantic_ai import Agent
 
-agent = Agent('gemini-1.5-flash')
+agent = Agent('google-gla:gemini-1.5-flash')
 
 
 async def main():

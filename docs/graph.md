@@ -190,9 +190,18 @@ stateDiagram-v2
   Increment --> DivisibleBy5
 ```
 
+In order to visualize a graph within a `jupyter-notebook`, `IPython.display` needs to be used:
+
+```python {title="jupyter_display_mermaid.py"  test="skip"}
+from graph_example import DivisibleBy5, fives_graph
+from IPython.display import Image, display
+
+display(Image(fives_graph.mermaid_image(start_node=DivisibleBy5)))
+```
+
 ## Stateful Graphs
 
-The "state" concept in `pydantic-graph` provides an optional way to access and mutate an object (often a `dataclass` or Pydantic model) as nodes run in a graph. If you think of Graphs as a production line, then you state is the engine being passed along the line and built up by each node as the graph is run.
+The "state" concept in `pydantic-graph` provides an optional way to access and mutate an object (often a `dataclass` or Pydantic model) as nodes run in a graph. If you think of Graphs as a production line, then your state is the engine being passed along the line and built up by each node as the graph is run.
 
 In the future, we intend to extend `pydantic-graph` to provide state persistence with the state recorded after each node is run, see [#695](https://github.com/pydantic/pydantic-ai/issues/695).
 
@@ -450,7 +459,7 @@ class Feedback(BaseNode[State, None, Email]):
 async def main():
     user = User(
         name='John Doe',
-        email='john.joe@exmaple.com',
+        email='john.joe@example.com',
         interests=['Haskel', 'Lisp', 'Fortran'],
     )
     state = State(user)

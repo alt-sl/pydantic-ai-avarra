@@ -25,11 +25,11 @@ from pydantic_ai.messages import (
 from pydantic_ai.result import Usage
 from pydantic_ai.settings import ModelSettings
 
-from ..conftest import IsNow, try_import
+from ..conftest import IsNow, TestEnv, try_import
 from .mock_async_stream import MockAsyncStream
 
 with try_import() as imports_successful:
-    from openai import NOT_GIVEN, AsyncOpenAI
+    from openai import NOT_GIVEN, AsyncOpenAI, OpenAIError
     from openai.types import chat
     from openai.types.chat.chat_completion import Choice
     from openai.types.chat.chat_completion_chunk import (
@@ -63,6 +63,20 @@ def test_init_with_base_url():
     assert m.client.api_key == 'foobar'
     assert m.name() == 'openai:gpt-4o'
     m.name()
+
+
+def test_init_with_non_openai_model():
+    m = OpenAIModel('llama3.2-vision:latest', base_url='https://example.com/v1/')
+    m.name()
+
+
+def test_init_of_openai_without_api_key_raises_error(env: TestEnv):
+    env.remove('OPENAI_API_KEY')
+    with pytest.raises(
+        OpenAIError,
+        match='^The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable$',
+    ):
+        OpenAIModel('gpt-4o')
 
 
 @dataclass
@@ -213,7 +227,7 @@ async def test_request_structured_response(allow_model_requests: None):
             ModelRequest(parts=[UserPromptPart(content='Hello', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[
-                    ToolCallPart.from_raw_args(
+                    ToolCallPart(
                         tool_name='final_result',
                         args='{"response": [1, 2, 123]}',
                         tool_call_id='123',
@@ -301,7 +315,7 @@ async def test_request_tool_call(allow_model_requests: None):
             ),
             ModelResponse(
                 parts=[
-                    ToolCallPart.from_raw_args(
+                    ToolCallPart(
                         tool_name='get_location',
                         args='{"loc_name": "San Fransisco"}',
                         tool_call_id='1',
@@ -322,7 +336,7 @@ async def test_request_tool_call(allow_model_requests: None):
             ),
             ModelResponse(
                 parts=[
-                    ToolCallPart.from_raw_args(
+                    ToolCallPart(
                         tool_name='get_location',
                         args='{"loc_name": "London"}',
                         tool_call_id='2',

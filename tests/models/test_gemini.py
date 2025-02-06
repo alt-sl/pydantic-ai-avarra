@@ -15,7 +15,6 @@ from typing_extensions import Literal, TypeAlias
 
 from pydantic_ai import Agent, ModelRetry, UnexpectedModelBehavior, UserError
 from pydantic_ai.messages import (
-    ArgsDict,
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
@@ -25,9 +24,11 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.gemini import (
     ApiKeyAuth,
     GeminiModel,
+    GeminiModelSettings,
     _content_model_response,
     _function_call_part_from_call,
     _gemini_response_ta,
@@ -37,6 +38,7 @@ from pydantic_ai.models.gemini import (
     _GeminiFunction,
     _GeminiFunctionCallingConfig,
     _GeminiResponse,
+    _GeminiSafetyRating,
     _GeminiTextPart,
     _GeminiToolConfig,
     _GeminiTools,
@@ -76,18 +78,21 @@ def test_api_key_empty(env: TestEnv):
         GeminiModel('gemini-1.5-flash')
 
 
-async def test_agent_model_simple(allow_model_requests: None):
+async def test_model_simple(allow_model_requests: None):
     m = GeminiModel('gemini-1.5-flash', api_key='via-arg')
-    agent_model = await m.agent_model(function_tools=[], allow_text_result=True, result_tools=[])
-    assert isinstance(agent_model.http_client, httpx.AsyncClient)
-    assert agent_model.model_name == 'gemini-1.5-flash'
-    assert isinstance(agent_model.auth, ApiKeyAuth)
-    assert agent_model.auth.api_key == 'via-arg'
-    assert agent_model.tools is None
-    assert agent_model.tool_config is None
+    assert isinstance(m.http_client, httpx.AsyncClient)
+    assert m.model_name == 'gemini-1.5-flash'
+    assert isinstance(m.auth, ApiKeyAuth)
+    assert m.auth.api_key == 'via-arg'
+
+    arc = ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[])
+    tools = m._get_tools(arc)
+    tool_config = m._get_tool_config(arc, tools)
+    assert tools is None
+    assert tool_config is None
 
 
-async def test_agent_model_tools(allow_model_requests: None):
+async def test_model_tools(allow_model_requests: None):
     m = GeminiModel('gemini-1.5-flash', api_key='via-arg')
     tools = [
         ToolDefinition(
@@ -111,8 +116,11 @@ async def test_agent_model_tools(allow_model_requests: None):
         'This is the tool for the final Result',
         {'type': 'object', 'title': 'Result', 'properties': {'spam': {'type': 'number'}}, 'required': ['spam']},
     )
-    agent_model = await m.agent_model(function_tools=tools, allow_text_result=True, result_tools=[result_tool])
-    assert agent_model.tools == snapshot(
+
+    arc = ModelRequestParameters(function_tools=tools, allow_text_result=True, result_tools=[result_tool])
+    tools = m._get_tools(arc)
+    tool_config = m._get_tool_config(arc, tools)
+    assert tools == snapshot(
         _GeminiTools(
             function_declarations=[
                 _GeminiFunction(
@@ -140,7 +148,7 @@ async def test_agent_model_tools(allow_model_requests: None):
             ]
         )
     )
-    assert agent_model.tool_config is None
+    assert tool_config is None
 
 
 async def test_require_response_tool(allow_model_requests: None):
@@ -150,8 +158,10 @@ async def test_require_response_tool(allow_model_requests: None):
         'This is the tool for the final Result',
         {'type': 'object', 'title': 'Result', 'properties': {'spam': {'type': 'number'}}},
     )
-    agent_model = await m.agent_model(function_tools=[], allow_text_result=False, result_tools=[result_tool])
-    assert agent_model.tools == snapshot(
+    arc = ModelRequestParameters(function_tools=[], allow_text_result=False, result_tools=[result_tool])
+    tools = m._get_tools(arc)
+    tool_config = m._get_tool_config(arc, tools)
+    assert tools == snapshot(
         _GeminiTools(
             function_declarations=[
                 _GeminiFunction(
@@ -165,7 +175,7 @@ async def test_require_response_tool(allow_model_requests: None):
             ]
         )
     )
-    assert agent_model.tool_config == snapshot(
+    assert tool_config == snapshot(
         _GeminiToolConfig(
             function_calling_config=_GeminiFunctionCallingConfig(mode='ANY', allowed_function_names=['result'])
         )
@@ -207,8 +217,9 @@ async def test_json_def_replaced(allow_model_requests: None):
         'This is the tool for the final Result',
         json_schema,
     )
-    agent_model = await m.agent_model(function_tools=[], allow_text_result=True, result_tools=[result_tool])
-    assert agent_model.tools == snapshot(
+    assert m._get_tools(
+        ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
+    ) == snapshot(
         _GeminiTools(
             function_declarations=[
                 _GeminiFunction(
@@ -253,8 +264,9 @@ async def test_json_def_replaced_any_of(allow_model_requests: None):
         'This is the tool for the final Result',
         json_schema,
     )
-    agent_model = await m.agent_model(function_tools=[], allow_text_result=True, result_tools=[result_tool])
-    assert agent_model.tools == snapshot(
+    assert m._get_tools(
+        ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
+    ) == snapshot(
         _GeminiTools(
             function_declarations=[
                 _GeminiFunction(
@@ -316,7 +328,7 @@ async def test_json_def_recursive(allow_model_requests: None):
         json_schema,
     )
     with pytest.raises(UserError, match=r'Recursive `\$ref`s in JSON Schema are not supported by Gemini'):
-        await m.agent_model(function_tools=[], allow_text_result=True, result_tools=[result_tool])
+        m._get_tools(ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool]))
 
 
 async def test_json_def_date(allow_model_requests: None):
@@ -347,8 +359,9 @@ async def test_json_def_date(allow_model_requests: None):
         'This is the tool for the final Result',
         json_schema,
     )
-    agent_model = await m.agent_model(function_tools=[], allow_text_result=True, result_tools=[result_tool])
-    assert agent_model.tools == snapshot(
+    assert m._get_tools(
+        ModelRequestParameters(function_tools=[], allow_text_result=True, result_tools=[result_tool])
+    ) == snapshot(
         _GeminiTools(
             function_declarations=[
                 _GeminiFunction(
@@ -474,9 +487,7 @@ async def test_text_success(get_gemini_client: GetGeminiClient):
 
 async def test_request_structured_response(get_gemini_client: GetGeminiClient):
     response = gemini_response(
-        _content_model_response(
-            ModelResponse(parts=[ToolCallPart.from_raw_args('final_result', {'response': [1, 2, 123]})])
-        )
+        _content_model_response(ModelResponse(parts=[ToolCallPart('final_result', {'response': [1, 2, 123]})]))
     )
     gemini_client = get_gemini_client(response)
     m = GeminiModel('gemini-1.5-flash', http_client=gemini_client)
@@ -491,7 +502,7 @@ async def test_request_structured_response(get_gemini_client: GetGeminiClient):
                 parts=[
                     ToolCallPart(
                         tool_name='final_result',
-                        args=ArgsDict(args_dict={'response': [1, 2, 123]}),
+                        args={'response': [1, 2, 123]},
                     )
                 ],
                 model_name='gemini-1.5-flash',
@@ -511,16 +522,14 @@ async def test_request_structured_response(get_gemini_client: GetGeminiClient):
 async def test_request_tool_call(get_gemini_client: GetGeminiClient):
     responses = [
         gemini_response(
-            _content_model_response(
-                ModelResponse(parts=[ToolCallPart.from_raw_args('get_location', {'loc_name': 'San Fransisco'})])
-            )
+            _content_model_response(ModelResponse(parts=[ToolCallPart('get_location', {'loc_name': 'San Fransisco'})]))
         ),
         gemini_response(
             _content_model_response(
                 ModelResponse(
                     parts=[
-                        ToolCallPart.from_raw_args('get_location', {'loc_name': 'London'}),
-                        ToolCallPart.from_raw_args('get_location', {'loc_name': 'New York'}),
+                        ToolCallPart('get_location', {'loc_name': 'London'}),
+                        ToolCallPart('get_location', {'loc_name': 'New York'}),
                     ]
                 )
             )
@@ -554,7 +563,7 @@ async def test_request_tool_call(get_gemini_client: GetGeminiClient):
                 parts=[
                     ToolCallPart(
                         tool_name='get_location',
-                        args=ArgsDict(args_dict={'loc_name': 'San Fransisco'}),
+                        args={'loc_name': 'San Fransisco'},
                     )
                 ],
                 model_name='gemini-1.5-flash',
@@ -573,11 +582,11 @@ async def test_request_tool_call(get_gemini_client: GetGeminiClient):
                 parts=[
                     ToolCallPart(
                         tool_name='get_location',
-                        args=ArgsDict(args_dict={'loc_name': 'London'}),
+                        args={'loc_name': 'London'},
                     ),
                     ToolCallPart(
                         tool_name='get_location',
-                        args=ArgsDict(args_dict={'loc_name': 'New York'}),
+                        args={'loc_name': 'New York'},
                     ),
                 ],
                 model_name='gemini-1.5-flash',
@@ -664,9 +673,7 @@ async def test_stream_text_no_data(get_gemini_client: GetGeminiClient):
 async def test_stream_structured(get_gemini_client: GetGeminiClient):
     responses = [
         gemini_response(
-            _content_model_response(
-                ModelResponse(parts=[ToolCallPart.from_raw_args('final_result', {'response': [1, 2]})])
-            ),
+            _content_model_response(ModelResponse(parts=[ToolCallPart('final_result', {'response': [1, 2]})])),
         ),
     ]
     json_data = _gemini_streamed_response_ta.dump_json(responses, by_alias=True)
@@ -684,10 +691,10 @@ async def test_stream_structured(get_gemini_client: GetGeminiClient):
 async def test_stream_structured_tool_calls(get_gemini_client: GetGeminiClient):
     first_responses = [
         gemini_response(
-            _content_model_response(ModelResponse(parts=[ToolCallPart.from_raw_args('foo', {'x': 'a'})])),
+            _content_model_response(ModelResponse(parts=[ToolCallPart('foo', {'x': 'a'})])),
         ),
         gemini_response(
-            _content_model_response(ModelResponse(parts=[ToolCallPart.from_raw_args('bar', {'y': 'b'})])),
+            _content_model_response(ModelResponse(parts=[ToolCallPart('bar', {'y': 'b'})])),
         ),
     ]
     d1 = _gemini_streamed_response_ta.dump_json(first_responses, by_alias=True)
@@ -695,9 +702,7 @@ async def test_stream_structured_tool_calls(get_gemini_client: GetGeminiClient):
 
     second_responses = [
         gemini_response(
-            _content_model_response(
-                ModelResponse(parts=[ToolCallPart.from_raw_args('final_result', {'response': [1, 2]})])
-            ),
+            _content_model_response(ModelResponse(parts=[ToolCallPart('final_result', {'response': [1, 2]})])),
         ),
     ]
     d2 = _gemini_streamed_response_ta.dump_json(second_responses, by_alias=True)
@@ -727,8 +732,8 @@ async def test_stream_structured_tool_calls(get_gemini_client: GetGeminiClient):
             ModelRequest(parts=[UserPromptPart(content='Hello', timestamp=IsNow(tz=timezone.utc))]),
             ModelResponse(
                 parts=[
-                    ToolCallPart(tool_name='foo', args=ArgsDict(args_dict={'x': 'a'})),
-                    ToolCallPart(tool_name='bar', args=ArgsDict(args_dict={'y': 'b'})),
+                    ToolCallPart(tool_name='foo', args={'x': 'a'}),
+                    ToolCallPart(tool_name='bar', args={'y': 'b'}),
                 ],
                 model_name='gemini-1.5-flash',
                 timestamp=IsNow(tz=timezone.utc),
@@ -743,7 +748,7 @@ async def test_stream_structured_tool_calls(get_gemini_client: GetGeminiClient):
                 parts=[
                     ToolCallPart(
                         tool_name='final_result',
-                        args=ArgsDict(args_dict={'response': [1, 2]}),
+                        args={'response': [1, 2]},
                     )
                 ],
                 model_name='gemini-1.5-flash',
@@ -772,7 +777,7 @@ async def test_stream_text_heterogeneous(get_gemini_client: GetGeminiClient):
                     _function_call_part_from_call(
                         ToolCallPart(
                             tool_name='get_location',
-                            args=ArgsDict(args_dict={'loc_name': 'San Fransisco'}),
+                            args={'loc_name': 'San Fransisco'},
                         )
                     ),
                 ],
@@ -795,7 +800,7 @@ async def test_empty_text_ignored():
     content = _content_model_response(
         ModelResponse(
             parts=[
-                ToolCallPart.from_raw_args('final_result', {'response': [1, 2, 123]}),
+                ToolCallPart('final_result', {'response': [1, 2, 123]}),
                 TextPart(content='xxx'),
             ]
         )
@@ -814,7 +819,7 @@ async def test_empty_text_ignored():
     content = _content_model_response(
         ModelResponse(
             parts=[
-                ToolCallPart.from_raw_args('final_result', {'response': [1, 2, 123]}),
+                ToolCallPart('final_result', {'response': [1, 2, 123]}),
                 TextPart(content=''),
             ]
         )
@@ -826,3 +831,126 @@ async def test_empty_text_ignored():
             'parts': [{'function_call': {'name': 'final_result', 'args': {'response': [1, 2, 123]}}}],
         }
     )
+
+
+async def test_model_settings(client_with_handler: ClientWithHandler, env: TestEnv, allow_model_requests: None) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        generation_config = json.loads(request.content)['generation_config']
+        assert generation_config == {
+            'max_output_tokens': 1,
+            'temperature': 0.1,
+            'top_p': 0.2,
+            'presence_penalty': 0.3,
+            'frequency_penalty': 0.4,
+        }
+        return httpx.Response(
+            200,
+            content=_gemini_response_ta.dump_json(
+                gemini_response(_content_model_response(ModelResponse(parts=[TextPart('world')]))),
+                by_alias=True,
+            ),
+            headers={'Content-Type': 'application/json'},
+        )
+
+    gemini_client = client_with_handler(handler)
+    m = GeminiModel('gemini-1.5-flash', http_client=gemini_client, api_key='mock')
+    agent = Agent(m)
+
+    result = await agent.run(
+        'hello',
+        model_settings={
+            'max_tokens': 1,
+            'temperature': 0.1,
+            'top_p': 0.2,
+            'presence_penalty': 0.3,
+            'frequency_penalty': 0.4,
+        },
+    )
+    assert result.data == 'world'
+
+
+def gemini_no_content_response(
+    safety_ratings: list[_GeminiSafetyRating], finish_reason: Literal['SAFETY'] | None = 'SAFETY'
+) -> _GeminiResponse:
+    candidate = _GeminiCandidates(safety_ratings=safety_ratings)
+    if finish_reason:
+        candidate['finish_reason'] = finish_reason
+    return _GeminiResponse(candidates=[candidate], usage_metadata=example_usage())
+
+
+async def test_safety_settings_unsafe(
+    client_with_handler: ClientWithHandler, env: TestEnv, allow_model_requests: None
+) -> None:
+    try:
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            safety_settings = json.loads(request.content)['safety_settings']
+            assert safety_settings == [
+                {'category': 'HARM_CATEGORY_CIVIC_INTEGRITY', 'threshold': 'BLOCK_LOW_AND_ABOVE'},
+                {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_LOW_AND_ABOVE'},
+            ]
+
+            return httpx.Response(
+                200,
+                content=_gemini_response_ta.dump_json(
+                    gemini_no_content_response(
+                        finish_reason='SAFETY',
+                        safety_ratings=[
+                            {'category': 'HARM_CATEGORY_HARASSMENT', 'probability': 'MEDIUM', 'blocked': True}
+                        ],
+                    ),
+                    by_alias=True,
+                ),
+                headers={'Content-Type': 'application/json'},
+            )
+
+        gemini_client = client_with_handler(handler)
+        m = GeminiModel('gemini-1.5-flash', http_client=gemini_client, api_key='mock')
+        agent = Agent(m)
+
+        await agent.run(
+            'a request for something rude',
+            model_settings=GeminiModelSettings(
+                gemini_safety_settings=[
+                    {'category': 'HARM_CATEGORY_CIVIC_INTEGRITY', 'threshold': 'BLOCK_LOW_AND_ABOVE'},
+                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_LOW_AND_ABOVE'},
+                ]
+            ),
+        )
+    except UnexpectedModelBehavior as e:
+        assert repr(e) == "UnexpectedModelBehavior('Safety settings triggered')"
+
+
+async def test_safety_settings_safe(
+    client_with_handler: ClientWithHandler, env: TestEnv, allow_model_requests: None
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        safety_settings = json.loads(request.content)['safety_settings']
+        assert safety_settings == [
+            {'category': 'HARM_CATEGORY_CIVIC_INTEGRITY', 'threshold': 'BLOCK_LOW_AND_ABOVE'},
+            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_LOW_AND_ABOVE'},
+        ]
+
+        return httpx.Response(
+            200,
+            content=_gemini_response_ta.dump_json(
+                gemini_response(_content_model_response(ModelResponse(parts=[TextPart('world')]))),
+                by_alias=True,
+            ),
+            headers={'Content-Type': 'application/json'},
+        )
+
+    gemini_client = client_with_handler(handler)
+    m = GeminiModel('gemini-1.5-flash', http_client=gemini_client, api_key='mock')
+    agent = Agent(m)
+
+    result = await agent.run(
+        'hello',
+        model_settings=GeminiModelSettings(
+            gemini_safety_settings=[
+                {'category': 'HARM_CATEGORY_CIVIC_INTEGRITY', 'threshold': 'BLOCK_LOW_AND_ABOVE'},
+                {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_LOW_AND_ABOVE'},
+            ]
+        ),
+    )
+    assert result.data == 'world'

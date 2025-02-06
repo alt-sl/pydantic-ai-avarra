@@ -110,7 +110,7 @@ from pydantic_ai import Agent
 from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.usage import UsageLimits
 
-agent = Agent('claude-3-5-sonnet-latest')
+agent = Agent('anthropic:claude-3-5-sonnet-latest')
 
 result_sync = agent.run_sync(
     'What is the capital of Italy? Answer with just the city.',
@@ -152,7 +152,8 @@ class NeverResultType(TypedDict):
 
 
 agent = Agent(
-    'claude-3-5-sonnet-latest',
+    'anthropic:claude-3-5-sonnet-latest',
+    retries=3,
     result_type=NeverResultType,
     system_prompt='Any time you get a response, call the `infinite_retry_tool` to produce another response.',
 )
@@ -202,6 +203,46 @@ result_sync = agent.run_sync(
 print(result_sync.data)
 #> Rome
 ```
+
+### Model specific settings
+
+If you wish to further customize model behavior, you can use a subclass of [`ModelSettings`][pydantic_ai.settings.ModelSettings], like [`GeminiModelSettings`][pydantic_ai.models.gemini.GeminiModelSettings], associated with your model of choice.
+
+For example:
+
+```py
+from pydantic_ai import Agent, UnexpectedModelBehavior
+from pydantic_ai.models.gemini import GeminiModelSettings
+
+agent = Agent('google-gla:gemini-1.5-flash')
+
+try:
+    result = agent.run_sync(
+        'Write a list of 5 very rude things that I might say to the universe after stubbing my toe in the dark:',
+        model_settings=GeminiModelSettings(
+            temperature=0.0,  # general model settings can also be specified
+            gemini_safety_settings=[
+                {
+                    'category': 'HARM_CATEGORY_HARASSMENT',
+                    'threshold': 'BLOCK_LOW_AND_ABOVE',
+                },
+                {
+                    'category': 'HARM_CATEGORY_HATE_SPEECH',
+                    'threshold': 'BLOCK_LOW_AND_ABOVE',
+                },
+            ],
+        ),
+    )
+except UnexpectedModelBehavior as e:
+    print(e)  # (1)!
+    """
+    Safety settings triggered, body:
+    <safety settings details>
+    """
+```
+
+1. This error is raised because the safety thresholds were exceeded.
+Generally, `result` would contain a normal `ModelResponse`.
 
 ## Runs vs. Conversations
 
@@ -440,7 +481,7 @@ with capture_run_messages() as messages:  # (2)!
                 parts=[
                     ToolCallPart(
                         tool_name='calc_volume',
-                        args=ArgsDict(args_dict={'size': 6}),
+                        args={'size': 6},
                         tool_call_id=None,
                         part_kind='tool-call',
                     )
@@ -465,7 +506,7 @@ with capture_run_messages() as messages:  # (2)!
                 parts=[
                     ToolCallPart(
                         tool_name='calc_volume',
-                        args=ArgsDict(args_dict={'size': 6}),
+                        args={'size': 6},
                         tool_call_id=None,
                         part_kind='tool-call',
                     )

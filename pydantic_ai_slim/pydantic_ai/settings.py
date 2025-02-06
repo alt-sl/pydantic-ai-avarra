@@ -80,9 +80,54 @@ class ModelSettings(TypedDict, total=False):
     """Whether to allow parallel tool calls.
 
     Supported by:
-    * OpenAI
+
+    * OpenAI (some models, not o1)
     * Groq
     * Anthropic
+    """
+
+    seed: int
+    """The random seed to use for the model, theoretically allowing for deterministic results.
+
+    Supported by:
+
+    * OpenAI
+    * Groq
+    * Cohere
+    * Mistral
+    """
+
+    presence_penalty: float
+    """Penalize new tokens based on whether they have appeared in the text so far.
+
+    Supported by:
+
+    * OpenAI
+    * Groq
+    * Cohere
+    * Gemini
+    * Mistral
+    """
+
+    frequency_penalty: float
+    """Penalize new tokens based on their existing frequency in the text so far.
+
+    Supported by:
+
+    * OpenAI
+    * Groq
+    * Cohere
+    * Gemini
+    * Mistral
+    """
+
+    logit_bias: dict[str, int]
+    """Modify the likelihood of specified tokens appearing in the completion.
+
+    Supported by:
+
+    * OpenAI
+    * Groq
     """
 
 
