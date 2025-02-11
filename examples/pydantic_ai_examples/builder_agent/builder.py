@@ -10,7 +10,11 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.usage import Usage, UsageLimits
 
 # Configure logfire - 'if-token-present' means nothing will be sent if you don't have logfire configured
-logfire.configure(send_to_logfire='if-token-present')
+try:
+    logfire.configure(send_to_logfire='if-token-present')
+except Exception:
+    # Silently continue if logfire configuration fails
+    pass
 
 # Models to represent agent configurations and state
 
